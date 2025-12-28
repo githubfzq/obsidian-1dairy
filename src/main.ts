@@ -1,7 +1,9 @@
 import { App, Modal, Notice, Plugin, TFile, TFolder } from 'obsidian';
 import { OneDiarySettings, DEFAULT_SETTINGS, DiaryEntry } from './types';
-import { parseTxtDiary, diaryToMarkdown, generateFileName } from './parser';
+import { parseTxtDiary, parsePdfDiary, diaryToMarkdown, generateFileName } from './parser';
 import { OneDiarySettingTab } from './settings';
+// @ts-ignore - pdfjs-dist types may not be perfect
+import * as pdfjsLib from 'pdfjs-dist';
 
 export default class OneDiaryPlugin extends Plugin {
 	settings: OneDiarySettings;
@@ -15,6 +17,15 @@ export default class OneDiaryPlugin extends Plugin {
 			name: '导入 TXT 格式日记',
 			callback: () => {
 				new ImportModal(this.app, this).open();
+			}
+		});
+
+		// 添加 PDF 导入命令
+		this.addCommand({
+			id: 'import-pdf-diary',
+			name: '导入 PDF 格式日记',
+			callback: () => {
+				new ImportPdfModal(this.app, this).open();
 			}
 		});
 
@@ -323,6 +334,259 @@ class ImportModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		this.fileContent = null;
+	}
+}
+
+/**
+ * PDF 导入对话框
+ */
+class ImportPdfModal extends Modal {
+	plugin: OneDiaryPlugin;
+	pdfText: string | null = null;
+
+	constructor(app: App, plugin: OneDiaryPlugin) {
+		super(app);
+		this.plugin = plugin;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', { text: '导入 PDF 格式日记' });
+
+		// 文件选择区域
+		const dropZone = contentEl.createDiv({ cls: 'one-diary-drop-zone' });
+		dropZone.createEl('p', { text: '点击选择文件或拖拽 PDF 文件到此处' });
+		
+		// 文件输入
+		const fileInput = dropZone.createEl('input', {
+			type: 'file',
+			attr: { accept: '.pdf' }
+		});
+		fileInput.style.display = 'none';
+
+		dropZone.addEventListener('click', () => fileInput.click());
+		
+		// 拖拽支持
+		dropZone.addEventListener('dragover', (e) => {
+			e.preventDefault();
+			dropZone.addClass('drag-over');
+		});
+		
+		dropZone.addEventListener('dragleave', () => {
+			dropZone.removeClass('drag-over');
+		});
+		
+		dropZone.addEventListener('drop', async (e) => {
+			e.preventDefault();
+			dropZone.removeClass('drag-over');
+			const file = e.dataTransfer?.files[0];
+			if (file) {
+				await this.handleFile(file, dropZone);
+			}
+		});
+
+		fileInput.addEventListener('change', async () => {
+			const file = fileInput.files?.[0];
+			if (file) {
+				await this.handleFile(file, dropZone);
+			}
+		});
+
+		// 预览区域
+		const previewEl = contentEl.createDiv({ cls: 'one-diary-preview' });
+		previewEl.style.display = 'none';
+
+		// 导入按钮
+		const buttonContainer = contentEl.createDiv({ cls: 'one-diary-buttons' });
+		const importBtn = buttonContainer.createEl('button', {
+			text: '开始导入',
+			cls: 'mod-cta'
+		});
+		importBtn.disabled = true;
+
+		importBtn.addEventListener('click', async () => {
+			if (!this.pdfText) return;
+
+			importBtn.disabled = true;
+			importBtn.textContent = '导入中...';
+
+			try {
+				const { entries, errors } = parsePdfDiary(this.pdfText);
+				
+				if (errors.length > 0) {
+					new Notice(`解析警告: ${errors.length} 个问题`);
+				}
+
+				if (entries.length === 0) {
+					new Notice('未找到有效的日记条目');
+					return;
+				}
+
+				const result = await this.plugin.importEntries(entries);
+				
+				new Notice(
+					`导入完成!\n成功: ${result.success} 篇\n跳过: ${result.skipped} 篇` +
+					(result.errors.length > 0 ? `\n错误: ${result.errors.length} 个` : '')
+				);
+
+				this.close();
+			} catch (error) {
+				new Notice(`导入失败: ${error.message}`);
+			} finally {
+				importBtn.disabled = false;
+				importBtn.textContent = '开始导入';
+			}
+		});
+
+		// 取消按钮
+		const cancelBtn = buttonContainer.createEl('button', { text: '取消' });
+		cancelBtn.addEventListener('click', () => this.close());
+
+		// 存储引用以便更新
+		(this as any).previewEl = previewEl;
+		(this as any).importBtn = importBtn;
+	}
+
+	async handleFile(file: File, dropZone: HTMLElement) {
+		const importBtn = (this as any).importBtn as HTMLButtonElement;
+		const previewEl = (this as any).previewEl as HTMLElement;
+
+		try {
+			// 检查 pdfjs-dist 是否可用
+			if (!pdfjsLib) {
+				throw new Error('pdfjs-dist 模块未正确加载');
+			}
+
+			// 配置 pdfjs-dist worker
+			// 在 Obsidian 插件环境中，我们使用 CDN 的 worker 文件
+			// 这是最可靠的方法，因为 worker 文件很大，不适合打包
+			if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+				// 使用多个 CDN 源作为后备
+				const workerUrls = [
+					`https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`,
+					`https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`,
+					`https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`
+				];
+				pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrls[0];
+			}
+
+			// 读取 PDF 文件
+			const arrayBuffer = await file.arrayBuffer();
+			
+			// 使用 pdfjs-dist 加载 PDF 文档
+			// 禁用 worker 以提高兼容性（在 Electron 环境中更可靠）
+			const loadingTask = pdfjsLib.getDocument({ 
+				data: arrayBuffer,
+				verbosity: 0, // 减少日志输出
+				// 禁用自动获取，避免网络请求
+				disableAutoFetch: true,
+				disableStream: false
+			});
+			const pdfDocument = await loadingTask.promise;
+			
+			// 提取所有页面的文本
+			let pdfText = '';
+			const numPages = pdfDocument.numPages;
+			
+			for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+				const page = await pdfDocument.getPage(pageNum);
+				const textContent = await page.getTextContent();
+				
+				// 组合文本项
+				let pageText = '';
+				let lastY: number | null = null;
+				
+				for (const item of textContent.items) {
+					// 只处理 TextItem 类型（有 str 属性）
+					if ('str' in item && item.str) {
+						// 检查是否在同一行（基于 Y 坐标）
+						const currentY = (item as any).transform?.[5] || null;
+						if (lastY !== null && currentY !== null && Math.abs(currentY - lastY) > 1) {
+							pageText += '\n';
+						}
+						pageText += item.str;
+						lastY = currentY;
+					}
+				}
+				
+				if (pageText) {
+					pdfText += (pdfText ? '\n\n' : '') + pageText;
+				}
+			}
+			
+			this.pdfText = pdfText;
+
+			const { entries, errors } = parsePdfDiary(pdfText);
+
+			dropZone.empty();
+			dropZone.createEl('p', { text: `✓ 已选择: ${file.name}` });
+			dropZone.createEl('p', { text: `找到 ${entries.length} 篇日记`, cls: 'one-diary-count' });
+
+			// 显示预览
+			if (entries.length > 0) {
+				previewEl.style.display = 'block';
+				previewEl.empty();
+				previewEl.createEl('h4', { text: '预览 (前3篇)' });
+				
+				const previewList = previewEl.createEl('ul');
+				const addTitle = this.plugin.settings.addTitle;
+				
+				entries.slice(0, 3).forEach(entry => {
+					const li = previewList.createEl('li');
+					li.createEl('strong', { text: entry.date });
+					
+					// 根据设置决定是否显示标题信息
+					if (addTitle) {
+						li.createSpan({ text: ` - ${entry.weekday}` });
+						if (entry.time) {
+							li.createSpan({ text: ` · ${entry.time}` });
+						}
+						if (entry.weather) {
+							li.createSpan({ text: ` · ${entry.weather}` });
+						}
+						if (entry.temperature) {
+							li.createSpan({ text: ` · ${entry.temperature}` });
+						}
+						if (entry.location) {
+							li.createSpan({ text: ` · ${entry.location}` });
+						}
+					}
+					
+					li.createEl('br');
+					li.createSpan({ 
+						text: entry.content.substring(0, 50) + (entry.content.length > 50 ? '...' : ''),
+						cls: 'one-diary-preview-content'
+					});
+				});
+
+				importBtn.disabled = false;
+			}
+		} catch (error) {
+			// 详细的错误信息
+			const errorMessage = error instanceof Error 
+				? `${error.message}\n堆栈: ${error.stack?.substring(0, 200)}` 
+				: String(error);
+			
+			console.error('PDF 导入错误:', error);
+			new Notice(`读取 PDF 文件失败: ${errorMessage}`);
+			
+			// 在界面上显示错误详情
+			dropZone.empty();
+			dropZone.createEl('p', { text: `❌ 错误: ${file.name}`, cls: 'one-diary-error' });
+			dropZone.createEl('p', { text: errorMessage, cls: 'one-diary-error-detail' });
+			dropZone.createEl('p', { 
+				text: '提示: 请检查控制台 (Ctrl/Cmd + Shift + I) 查看详细错误信息', 
+				cls: 'one-diary-error-hint' 
+			});
+		}
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+		this.pdfText = null;
 	}
 }
 

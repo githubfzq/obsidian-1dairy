@@ -6,6 +6,8 @@ export interface DiaryEntry {
 	date: string;
 	/** 星期 */
 	weekday: string;
+	/** 时间 - 格式: HH:mm (从 PDF 中提取) */
+	time?: string;
 	/** 天气 */
 	weather?: string;
 	/** 温度 */
