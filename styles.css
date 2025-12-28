@@ -1,8 +1,109 @@
-/*
+/* 1Diary Import Plugin Styles */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+/* 导入设置区域 */
+.one-diary-import-settings {
+	margin-bottom: 20px;
+	padding: 12px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+}
 
-If your plugin does not need CSS, delete this file.
+.one-diary-import-settings .setting-item {
+	border-top: none;
+	padding: 0;
+	margin: 0;
+}
 
-*/
+.one-diary-import-settings .setting-item-info {
+	flex: 1;
+}
+
+.one-diary-import-settings .setting-item-name {
+	font-weight: 500;
+	color: var(--text-normal);
+	margin-bottom: 4px;
+}
+
+.one-diary-import-settings .setting-item-description {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	line-height: 1.4;
+}
+
+.one-diary-import-settings .setting-item-control {
+	flex-shrink: 0;
+}
+
+/* 导入对话框 */
+.one-diary-drop-zone {
+	border: 2px dashed var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 40px 20px;
+	text-align: center;
+	cursor: pointer;
+	transition: all 0.2s ease;
+	margin-bottom: 16px;
+	background: var(--background-secondary);
+}
+
+.one-diary-drop-zone:hover {
+	border-color: var(--interactive-accent);
+	background: var(--background-secondary-alt);
+}
+
+.one-diary-drop-zone.drag-over {
+	border-color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
+
+.one-diary-drop-zone p {
+	margin: 8px 0;
+	color: var(--text-muted);
+}
+
+.one-diary-count {
+	font-size: 0.9em;
+	color: var(--text-accent);
+}
+
+/* 预览区域 */
+.one-diary-preview {
+	margin: 16px 0;
+	padding: 12px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+	max-height: 200px;
+	overflow-y: auto;
+}
+
+.one-diary-preview h4 {
+	margin: 0 0 8px 0;
+	color: var(--text-normal);
+}
+
+.one-diary-preview ul {
+	margin: 0;
+	padding-left: 20px;
+}
+
+.one-diary-preview li {
+	margin-bottom: 12px;
+	line-height: 1.4;
+}
+
+.one-diary-preview-content {
+	color: var(--text-muted);
+	font-size: 0.85em;
+}
+
+/* 按钮容器 */
+.one-diary-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.one-diary-buttons button {
+	padding: 8px 16px;
+}

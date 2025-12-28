@@ -1,94 +1,109 @@
-# Obsidian Sample Plugin
+# Obsidian 1Diary
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+将「一本日记」(1Diary) App 的日记数据导入到 Obsidian。
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## 功能特性
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+- ✅ 支持 TXT 格式日记导入
+- ✅ 自动解析日期、天气、位置等元数据
+- ✅ 生成 YAML frontmatter
+- ✅ 按年份自动分组
+- ✅ 跳过已存在的日记（避免重复导入）
+- ✅ 可自定义输出目录和文件名格式
 
-## First time developing plugins?
+## 安装
 
-Quick starting guide for new plugin devs:
+### 手动安装
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+1. 下载最新的 `main.js`, `manifest.json`, `styles.css`
+2. 在 Obsidian Vault 目录下创建 `.obsidian/plugins/obsidian-1dairy/` 文件夹
+3. 将下载的文件复制到该文件夹
+4. 重启 Obsidian，在设置中启用插件
 
-## Releasing new releases
+### 开发安装
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+```bash
+# 克隆项目
+git clone https://github.com/githubfzq/obsidian-1dairy.git
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+# 进入目录
+cd obsidian-1dairy
 
-## Adding your plugin to the community plugin list
+# 安装依赖
+pnpm install
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+# 构建
+pnpm run build
 
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint .\src\`
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+# 或开发模式（自动监听变化）
+pnpm run dev
 ```
 
-If you have multiple URLs, you can also do:
+## 使用方法
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
+### 1. 从「一本日记」导出数据
+
+1. 打开「一本日记」App
+2. 进入 设置 → 导入导出
+3. 选择导出为 **TXT 格式**
+
+### 2. 在 Obsidian 中导入
+
+**方式一：使用命令**
+1. 按 `Ctrl/Cmd + P` 打开命令面板
+2. 搜索「导入 TXT 格式日记」
+3. 选择导出的 TXT 文件
+4. 点击「开始导入」
+
+**方式二：点击图标**
+- 点击左侧边栏的📖图标，打开导入对话框
+
+## 设置选项
+
+| 设置项 | 说明 | 默认值 |
+|--------|------|--------|
+| 日记输出目录 | 导入的日记保存位置 | `日记` |
+| 文件名日期格式 | 日记文件名格式 | `YYYY-MM-DD` |
+| 按年份分组 | 是否按年份创建子文件夹 | 开启 |
+| 导入图片附件 | 是否导入附件（开发中） | 开启 |
+| 附件保存目录 | 图片附件保存位置 | `attachments/diary` |
+
+## 导出格式说明
+
+插件支持的 TXT 格式示例：
+
+```
+2025年02月08日 周六 · 晴 · 4℃ · 苏州市
+今天是美好的一天...
+
+2025年02月09日 周日 · 多云 · 6℃ · 苏州市
+另一篇日记内容...
 ```
 
-## API Documentation
+导入后生成的 Markdown：
 
-See https://github.com/obsidianmd/obsidian-api
+```markdown
+---
+date: 2025-02-08
+weekday: 周六
+weather: 晴
+temperature: 4°C
+location: "苏州市"
+---
+
+# 周六 · 晴 · 4°C · 苏州市
+
+今天是美好的一天...
+```
+
+## 开发计划
+
+- [ ] 支持 ZIP 压缩包导入
+- [ ] 支持图片附件导入
+- [ ] 支持标签和分类
+- [ ] 增量同步功能
+- [ ] 支持 JSON 格式（如果能解密）
+
+## 许可证
+
+MIT License
