@@ -38,6 +38,59 @@ export default class OneDiaryPlugin extends Plugin {
 	}
 
 	/**
+	 * 解析现有 Markdown 文件，提取 frontmatter 和 body
+	 */
+	private parseMarkdownFile(content: string): { frontmatter: string; body: string } {
+		const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n/;
+		const match = content.match(frontmatterRegex);
+		
+		if (match) {
+			const frontmatter = match[0]; // 包含 --- 分隔符
+			const body = content.substring(match[0].length).trim();
+			return { frontmatter, body };
+		}
+		
+		// 如果没有 frontmatter，返回空 frontmatter 和整个内容作为 body
+		return { frontmatter: '', body: content.trim() };
+	}
+
+	/**
+	 * 合并同一天的日记条目内容
+	 */
+	private mergeDiaryContent(existingContent: string, newEntry: DiaryEntry): string {
+		const { frontmatter, body } = this.parseMarkdownFile(existingContent);
+		
+		// 生成新条目的内容部分（不包含 frontmatter 和标题）
+		const newEntryContent = newEntry.content.trim();
+		
+		if (!newEntryContent) {
+			// 如果新条目没有内容，直接返回现有内容
+			return existingContent;
+		}
+		
+		// 构建合并后的内容
+		const separator = '\n\n***\n\n'; // 使用水平分隔符区分不同条目
+		
+		let mergedContent = '';
+		if (frontmatter) {
+			// 如果有 frontmatter，保持它
+			mergedContent = frontmatter + '\n';
+		}
+		
+		// 追加现有 body
+		if (body) {
+			mergedContent += body;
+			// 如果 body 不为空，添加分隔符
+			mergedContent += separator;
+		}
+		
+		// 追加新条目内容
+		mergedContent += newEntryContent;
+		
+		return mergedContent;
+	}
+
+	/**
 	 * 导入日记条目到 Obsidian
 	 */
 	async importEntries(entries: DiaryEntry[], groupByYear?: boolean): Promise<{ success: number; skipped: number; errors: string[] }> {
@@ -65,15 +118,18 @@ export default class OneDiaryPlugin extends Plugin {
 
 				// 检查文件是否已存在
 				const existingFile = vault.getAbstractFileByPath(filePath);
-				if (existingFile) {
-					result.skipped++;
-					continue;
+				if (existingFile && existingFile instanceof TFile) {
+					// 文件已存在，合并内容
+					const existingContent = await vault.read(existingFile);
+					const mergedContent = this.mergeDiaryContent(existingContent, entry);
+					await vault.modify(existingFile, mergedContent);
+					result.success++;
+				} else {
+					// 文件不存在，创建新文件
+					const markdown = diaryToMarkdown(entry, this.settings.addTitle);
+					await vault.create(filePath, markdown);
+					result.success++;
 				}
-
-				// 转换为 Markdown 并创建文件
-				const markdown = diaryToMarkdown(entry, this.settings.addTitle);
-				await vault.create(filePath, markdown);
-				result.success++;
 
 			} catch (error) {
 				result.errors.push(`${entry.date}: ${error.message}`);
