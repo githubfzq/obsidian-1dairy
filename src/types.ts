@@ -57,6 +57,34 @@ export const DEFAULT_SETTINGS: OneDiarySettings = {
 };
 
 /**
+ * PDF 图片数据接口
+ */
+export interface PdfImage {
+	/** 图片数据（Base64 或 Uint8Array） */
+	data: Uint8Array;
+	/** 图片格式：png, jpeg 等 */
+	format: string;
+	/** 图片宽度 */
+	width: number;
+	/** 图片高度 */
+	height: number;
+	/** 图片所在页码 */
+	pageNum: number;
+	/** 图片在页面中的索引 */
+	imageIndex: number;
+}
+
+/**
+ * PDF 解析结果（包含图片）
+ */
+export interface PdfParseResult {
+	entries: DiaryEntry[];
+	errors: string[];
+	/** 图片数据（按页码分组） */
+	images: Map<number, PdfImage[]>;
+}
+
+/**
  * 解析结果
  */
 export interface ParseResult {
