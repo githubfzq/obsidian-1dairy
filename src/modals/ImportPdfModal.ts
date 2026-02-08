@@ -99,12 +99,14 @@ export class ImportPdfModal extends Modal {
 
 				// 将图片与日记条目关联
 				const entriesWithImages = this.associateImagesWithEntries(entries);
+				const pageNumToResolvedDate = this.getResolvedPageToDate(entries);
 
 				// 导入日记和图片
 				const result = await this.plugin.importEntriesWithImages(
 					entriesWithImages,
 					this.pageImages,
-					this.pageToDate
+					this.pageToDate,
+					pageNumToResolvedDate
 				);
 
 				let noticeText = `导入完成!\n成功: ${result.success} 篇\n跳过: ${result.skipped} 篇`;
@@ -204,19 +206,34 @@ export class ImportPdfModal extends Modal {
 				const page = await pdfDocument.getPage(pageNum);
 				const textContent = await page.getTextContent();
 
-				let pageText = '';
-				let lastY: number | null = null;
-
+				// 按行合并：PDF.js 的 items 是小块（字/词级别），需按 y 分组、行内按 x 排序后再拼接
+				type TextItemWithPos = { str: string; x: number; y: number };
+				const itemsWithPos: TextItemWithPos[] = [];
 				for (const item of textContent.items) {
 					if ('str' in item && item.str) {
-						const currentY = (item as any).transform?.[5] || null;
-						if (lastY !== null && currentY !== null && Math.abs(currentY - lastY) > 1) {
-							pageText += '\n';
-						}
-						pageText += item.str;
-						lastY = currentY;
+						const transform = (item as { str: string; transform?: number[] }).transform;
+						const x = transform?.[4] ?? 0;
+						const y = transform?.[5] ?? 0;
+						itemsWithPos.push({ str: item.str, x, y });
 					}
 				}
+
+				const lineTolerance = 2; // 同一行 y 可能略有浮动
+				const lineMap = new Map<number, TextItemWithPos[]>();
+				for (const it of itemsWithPos) {
+					const yKey = Math.round(it.y / lineTolerance) * lineTolerance;
+					if (!lineMap.has(yKey)) lineMap.set(yKey, []);
+					lineMap.get(yKey)!.push(it);
+				}
+
+				const lines: string[] = [];
+				const sortedYKeys = [...lineMap.keys()].sort((a, b) => b - a); // PDF 坐标系从上到下 y 递减
+				for (const yKey of sortedYKeys) {
+					const lineItems = lineMap.get(yKey)!;
+					lineItems.sort((a, b) => a.x - b.x);
+					lines.push(lineItems.map((it) => it.str).join(''));
+				}
+				const pageText = lines.join('\n');
 
 				if (pageText) {
 					pdfText += (pdfText ? '\n\n' : '') + pageText;
@@ -324,6 +341,38 @@ export class ImportPdfModal extends Modal {
 	}
 
 	/**
+	 * 获取页码对应的日期：先查 pageToDate，若无则用前一页的日期（有图无日期页归入前一日期）
+	 */
+	private getDateForPage(pageNum: number): string | undefined {
+		let p = pageNum;
+		while (p >= 1) {
+			const date = this.pageToDate.get(p);
+			if (date) return date;
+			p--;
+		}
+		return undefined;
+	}
+
+	/**
+	 * 返回每页解析后的日期（与 associate 逻辑一致），供插件保存图片时使用
+	 */
+	getResolvedPageToDate(entries: DiaryEntry[]): Map<number, string> {
+		const resolved = new Map<number, string>();
+		const sortedEntryDates = [...entries].sort((a, b) => a.date.localeCompare(b.date)).map((e) => e.date);
+		const sortedImagePages = [...this.pageImages.keys()].sort((a, b) => a - b);
+
+		this.pageImages.forEach((_, pageNum) => {
+			let date = this.getDateForPage(pageNum);
+			if (!date && sortedEntryDates.length > 0) {
+				const idx = sortedImagePages.indexOf(pageNum);
+				date = sortedEntryDates[idx % sortedEntryDates.length];
+			}
+			if (date) resolved.set(pageNum, date);
+		});
+		return resolved;
+	}
+
+	/**
 	 * 将图片与日记条目关联
 	 */
 	associateImagesWithEntries(entries: DiaryEntry[]): DiaryEntry[] {
@@ -332,8 +381,16 @@ export class ImportPdfModal extends Modal {
 			dateToEntry.set(entry.date, entry);
 		}
 
+		const attachmentFolder = this.plugin.settings.attachmentFolder;
+		const sortedEntryDates = [...entries].sort((a, b) => a.date.localeCompare(b.date)).map((e) => e.date);
+		const sortedImagePages = [...this.pageImages.keys()].sort((a, b) => a - b);
+
 		this.pageImages.forEach((images, pageNum) => {
-			const date = this.pageToDate.get(pageNum);
+			let date = this.getDateForPage(pageNum);
+			if (!date && sortedEntryDates.length > 0) {
+				const idx = sortedImagePages.indexOf(pageNum);
+				date = sortedEntryDates[idx % sortedEntryDates.length];
+			}
 			if (date) {
 				const entry = dateToEntry.get(date);
 				if (entry) {
@@ -342,7 +399,7 @@ export class ImportPdfModal extends Modal {
 					}
 					images.forEach((img, idx) => {
 						const imageName = `diary-${date}-p${pageNum}-${idx}.${img.format}`;
-						entry.attachments!.push(imageName);
+						entry.attachments!.push(`${attachmentFolder}/${imageName}`);
 					});
 				}
 			}

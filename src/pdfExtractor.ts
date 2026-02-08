@@ -1,10 +1,11 @@
 import type { PdfImage } from './types';
 
-// pdfjs-dist OPS 常量 (避免直接导入内部模块)
+// pdfjs-dist 3.x OPS 常量 (避免直接导入内部模块)
+// 82 paintJpegXObject 在 3.x 中已移除，图片多为 85 或 66
 const PDF_OPS = {
-	paintJpegXObject: 82,
-	paintImageXObject: 85,
-	paintImageMaskXObject: 83
+	paintXObject: 66,
+	paintImageMaskXObject: 83,
+	paintImageXObject: 85
 };
 
 /**
@@ -103,8 +104,8 @@ async function convertImageData(imgData: any): Promise<{
 			return null;
 		}
 
-		// 创建 ImageData
-		let imageData: ImageData;
+		// 创建 ImageData（或从 bitmap 绘制，此时不设置 imageData）
+		let imageData: ImageData | undefined;
 
 		if (imgData.data instanceof Uint8ClampedArray) {
 			// 直接是 RGBA 数据
@@ -130,12 +131,17 @@ async function convertImageData(imgData: any): Promise<{
 
 				imageData = new ImageData(rgba, width, height);
 			}
+		} else if (imgData.bitmap != null && typeof (imgData.bitmap as any).width === 'number' && typeof (imgData.bitmap as any).height === 'number') {
+			// pdf.js 有时只提供 bitmap（ImageBitmap），不提供 data；从 bitmap 绘制到 canvas 再导出 PNG
+			ctx.drawImage(imgData.bitmap as CanvasImageSource, 0, 0);
 		} else {
 			console.warn('未知的图片数据格式');
 			return null;
 		}
 
-		ctx.putImageData(imageData, 0, 0);
+		if (imageData !== undefined) {
+			ctx.putImageData(imageData, 0, 0);
+		}
 
 		// 转换为 PNG blob
 		const blob = await new Promise<Blob | null>((resolve) => {
@@ -186,13 +192,13 @@ export async function extractImagesFromPage(page: any, pageNum: number): Promise
 		const operators = operatorList.fnArray;
 		const args = operatorList.argsArray;
 
-		// 收集所有图片名称
+		// 收集所有图片名称：85/83 为直接图片；66 为 XObject（可能是图片或 Form，取回后再过滤）
 		const imageNames: string[] = [];
 		for (let i = 0; i < operators.length; i++) {
 			const op = operators[i];
 			if (
+				op === PDF_OPS.paintXObject ||
 				op === PDF_OPS.paintImageXObject ||
-				op === PDF_OPS.paintJpegXObject ||
 				op === PDF_OPS.paintImageMaskXObject
 			) {
 				const imageName = args[i][0];

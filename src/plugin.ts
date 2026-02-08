@@ -106,11 +106,13 @@ export default class OneDiaryPlugin extends Plugin {
 
 	/**
 	 * 导入日记条目和关联的图片
+	 * @param pageNumToResolvedDate 可选：每页解析后的日期（与 associate 逻辑一致），用于在 pageToDate 为空时仍能保存图片
 	 */
 	async importEntriesWithImages(
 		entries: DiaryEntry[],
 		pageImages: Map<number, PdfImage[]>,
-		pageToDate: Map<number, string>
+		pageToDate: Map<number, string>,
+		pageNumToResolvedDate?: Map<number, string>
 	): Promise<{ success: number; skipped: number; errors: string[]; imagesImported: number }> {
 		const result = { success: 0, skipped: 0, errors: [] as string[], imagesImported: 0 };
 		const vault = this.app.vault;
@@ -123,7 +125,7 @@ export default class OneDiaryPlugin extends Plugin {
 
 		if (this.settings.importAttachments && pageImages.size > 0) {
 			for (const [pageNum, images] of pageImages) {
-				const date = pageToDate.get(pageNum);
+				const date = pageNumToResolvedDate?.get(pageNum) ?? pageToDate.get(pageNum);
 				if (!date) continue;
 
 				for (let idx = 0; idx < images.length; idx++) {
