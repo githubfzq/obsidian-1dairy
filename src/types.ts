@@ -90,5 +90,7 @@ export interface PdfParseResult {
 export interface ParseResult {
 	entries: DiaryEntry[];
 	errors: string[];
+	/** PDF 解析时每条目在全文中的起止行（仅 parsePdfDiary 填充） */
+	entryLineRanges?: { startLine: number; endLine: number }[];
 }
 

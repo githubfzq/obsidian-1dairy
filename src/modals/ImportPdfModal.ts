@@ -9,13 +9,20 @@ import * as pdfjsLib from 'pdfjs-dist';
 /**
  * PDF 导入对话框
  */
+/** 条目页码范围（与 entries 一一对应） */
+export type EntryPageRange = { startPage: number; endPage: number };
+
 export class ImportPdfModal extends Modal {
 	plugin: OneDiaryPlugin;
 	pdfText: string | null = null;
+	/** 按页存储的文本（pageTexts[0] = 第 1 页） */
+	pageTexts: string[] = [];
 	/** 按页码存储的图片数据 */
 	pageImages: Map<number, PdfImage[]> = new Map();
-	/** 页码到日期的映射（第一次在该页出现的日期） */
-	pageToDate: Map<number, string> = new Map();
+	/** 解析得到的日记条目（handleFile 后缓存，导入时直接使用） */
+	entries: DiaryEntry[] = [];
+	/** 每条目对应的页码范围（与 entries 一一对应） */
+	entryPageRanges: EntryPageRange[] = [];
 
 	constructor(app: App, plugin: OneDiaryPlugin) {
 		super(app);
@@ -80,33 +87,29 @@ export class ImportPdfModal extends Modal {
 		importBtn.disabled = true;
 
 		importBtn.addEventListener('click', async () => {
-			if (!this.pdfText) return;
+			if (!this.pdfText || this.entries.length === 0) return;
 
 			importBtn.disabled = true;
 			importBtn.textContent = '导入中...';
 
 			try {
-				const { entries, errors } = parsePdfDiary(this.pdfText);
-
-				if (errors.length > 0) {
-					new Notice(`解析警告: ${errors.length} 个问题`);
-				}
-
-				if (entries.length === 0) {
-					new Notice('未找到有效的日记条目');
+				// 使用 handleFile 时缓存的条目与页码范围，统一按页归属图片
+				const entries = this.entries;
+				const entryPageRanges = this.entryPageRanges;
+				if (entryPageRanges.length !== entries.length) {
+					new Notice('解析状态异常，请重新选择 PDF 文件');
 					return;
 				}
 
-				// 将图片与日记条目关联
-				const entriesWithImages = this.associateImagesWithEntries(entries);
-				const pageNumToResolvedDate = this.getResolvedPageToDate(entries);
+				// 将图片按页码范围关联到日记条目
+				const entriesWithImages = this.associateImagesWithEntries(entries, entryPageRanges);
+				const pageNumToDate = this.getPageNumToDate(entries, entryPageRanges);
 
 				// 导入日记和图片
 				const result = await this.plugin.importEntriesWithImages(
 					entriesWithImages,
 					this.pageImages,
-					this.pageToDate,
-					pageNumToResolvedDate
+					pageNumToDate
 				);
 
 				let noticeText = `导入完成!\n成功: ${result.success} 篇\n跳过: ${result.skipped} 篇`;
@@ -190,15 +193,14 @@ export class ImportPdfModal extends Modal {
 			const pdfDocument = await loadingTask.promise;
 
 			this.pageImages.clear();
-			this.pageToDate.clear();
+			this.pageTexts = [];
+			this.entries = [];
+			this.entryPageRanges = [];
 
-			let pdfText = '';
 			const numPages = pdfDocument.numPages;
 			const shouldExtractImages = this.plugin.settings.importAttachments;
 
 			loadingText.textContent = '正在解析页面...';
-
-			const dateRegex = /(\d{4})年(\d{2})[月⽉](\d{2})[日⽇]/;
 
 			for (let pageNum = 1; pageNum <= numPages; pageNum++) {
 				updateProgress(pageNum, numPages, '解析页面');
@@ -226,27 +228,15 @@ export class ImportPdfModal extends Modal {
 					lineMap.get(yKey)!.push(it);
 				}
 
-				const lines: string[] = [];
+				const pageLines: string[] = [];
 				const sortedYKeys = [...lineMap.keys()].sort((a, b) => b - a); // PDF 坐标系从上到下 y 递减
 				for (const yKey of sortedYKeys) {
 					const lineItems = lineMap.get(yKey)!;
 					lineItems.sort((a, b) => a.x - b.x);
-					lines.push(lineItems.map((it) => it.str).join(''));
+					pageLines.push(lineItems.map((it) => it.str).join(''));
 				}
-				const pageText = lines.join('\n');
-
-				if (pageText) {
-					pdfText += (pdfText ? '\n\n' : '') + pageText;
-
-					const dateMatch = pageText.match(dateRegex);
-					if (dateMatch) {
-						const [, year, month, day] = dateMatch;
-						const date = `${year}-${month}-${day}`;
-						if (!this.pageToDate.has(pageNum)) {
-							this.pageToDate.set(pageNum, date);
-						}
-					}
-				}
+				const pageText = pageLines.join('\n');
+				this.pageTexts.push(pageText);
 
 				// 提取图片（使用 pdfExtractor）
 				if (shouldExtractImages) {
@@ -257,13 +247,39 @@ export class ImportPdfModal extends Modal {
 				}
 			}
 
-			this.pdfText = pdfText;
+			// 构建与 parsePdfDiary 一致的全文字符串及行→页码映射
+			const lines: string[] = [];
+			const lineToPage: number[] = [];
+			for (let p = 0; p < this.pageTexts.length; p++) {
+				const pageLines = this.pageTexts[p].split('\n');
+				for (const l of pageLines) {
+					lines.push(l);
+					lineToPage.push(p + 1);
+				}
+				if (p < this.pageTexts.length - 1) {
+					lines.push('');
+					lineToPage.push(p + 2);
+				}
+			}
+			const fullText = lines.join('\n');
+			this.pdfText = fullText;
 
 			loadingText.textContent = '正在解析日记条目...';
 			progressFill.style.width = '100%';
 			progressText.textContent = '完成';
 
-			const { entries } = parsePdfDiary(pdfText);
+			const { entries, entryLineRanges } = parsePdfDiary(fullText);
+			this.entries = entries;
+
+			if (entryLineRanges && entryLineRanges.length === entries.length) {
+				for (let i = 0; i < entries.length; i++) {
+					const { startLine, endLine } = entryLineRanges[i];
+					this.entryPageRanges.push({
+						startPage: lineToPage[startLine],
+						endPage: lineToPage[endLine]
+					});
+				}
+			}
 
 			let totalImages = 0;
 			this.pageImages.forEach((images) => {
@@ -341,70 +357,42 @@ export class ImportPdfModal extends Modal {
 	}
 
 	/**
-	 * 获取页码对应的日期：先查 pageToDate，若无则用前一页的日期（有图无日期页归入前一日期）
+	 * 根据条目页码范围得到页码→日期映射，供插件保存图片时使用
 	 */
-	private getDateForPage(pageNum: number): string | undefined {
-		let p = pageNum;
-		while (p >= 1) {
-			const date = this.pageToDate.get(p);
-			if (date) return date;
-			p--;
-		}
-		return undefined;
-	}
-
-	/**
-	 * 返回每页解析后的日期（与 associate 逻辑一致），供插件保存图片时使用
-	 */
-	getResolvedPageToDate(entries: DiaryEntry[]): Map<number, string> {
-		const resolved = new Map<number, string>();
-		const sortedEntryDates = [...entries].sort((a, b) => a.date.localeCompare(b.date)).map((e) => e.date);
-		const sortedImagePages = [...this.pageImages.keys()].sort((a, b) => a - b);
-
+	getPageNumToDate(entries: DiaryEntry[], entryPageRanges: EntryPageRange[]): Map<number, string> {
+		const pageNumToDate = new Map<number, string>();
 		this.pageImages.forEach((_, pageNum) => {
-			let date = this.getDateForPage(pageNum);
-			if (!date && sortedEntryDates.length > 0) {
-				const idx = sortedImagePages.indexOf(pageNum);
-				date = sortedEntryDates[idx % sortedEntryDates.length];
-			}
-			if (date) resolved.set(pageNum, date);
-		});
-		return resolved;
-	}
-
-	/**
-	 * 将图片与日记条目关联
-	 */
-	associateImagesWithEntries(entries: DiaryEntry[]): DiaryEntry[] {
-		const dateToEntry = new Map<string, DiaryEntry>();
-		for (const entry of entries) {
-			dateToEntry.set(entry.date, entry);
-		}
-
-		const attachmentFolder = this.plugin.settings.attachmentFolder;
-		const sortedEntryDates = [...entries].sort((a, b) => a.date.localeCompare(b.date)).map((e) => e.date);
-		const sortedImagePages = [...this.pageImages.keys()].sort((a, b) => a - b);
-
-		this.pageImages.forEach((images, pageNum) => {
-			let date = this.getDateForPage(pageNum);
-			if (!date && sortedEntryDates.length > 0) {
-				const idx = sortedImagePages.indexOf(pageNum);
-				date = sortedEntryDates[idx % sortedEntryDates.length];
-			}
-			if (date) {
-				const entry = dateToEntry.get(date);
-				if (entry) {
-					if (!entry.attachments) {
-						entry.attachments = [];
-					}
-					images.forEach((img, idx) => {
-						const imageName = `diary-${date}-p${pageNum}-${idx}.${img.format}`;
-						entry.attachments!.push(`${attachmentFolder}/${imageName}`);
-					});
+			for (let i = 0; i < entries.length; i++) {
+				const { startPage, endPage } = entryPageRanges[i];
+				if (pageNum >= startPage && pageNum <= endPage) {
+					pageNumToDate.set(pageNum, entries[i].date);
+					break;
 				}
 			}
 		});
+		return pageNumToDate;
+	}
 
+	/**
+	 * 按条目页码范围将图片关联到对应日记条目
+	 */
+	associateImagesWithEntries(entries: DiaryEntry[], entryPageRanges: EntryPageRange[]): DiaryEntry[] {
+		const attachmentFolder = this.plugin.settings.attachmentFolder;
+		for (let i = 0; i < entries.length; i++) {
+			const entry = entries[i];
+			const { startPage, endPage } = entryPageRanges[i];
+			for (let pageNum = startPage; pageNum <= endPage; pageNum++) {
+				const images = this.pageImages.get(pageNum);
+				if (!images) continue;
+				if (!entry.attachments) {
+					entry.attachments = [];
+				}
+				images.forEach((img, idx) => {
+					const imageName = `diary-${entry.date}-p${pageNum}-${idx}.${img.format}`;
+					entry.attachments!.push(`${attachmentFolder}/${imageName}`);
+				});
+			}
+		}
 		return entries;
 	}
 
@@ -412,7 +400,9 @@ export class ImportPdfModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		this.pdfText = null;
+		this.pageTexts = [];
 		this.pageImages.clear();
-		this.pageToDate.clear();
+		this.entries = [];
+		this.entryPageRanges = [];
 	}
 }

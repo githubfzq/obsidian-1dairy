@@ -26,3 +26,6 @@ data
 
 # python
 .venv
+
+# log
+*.log

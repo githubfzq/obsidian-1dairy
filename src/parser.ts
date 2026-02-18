@@ -175,11 +175,13 @@ export function parseTxtDiary(content: string): ParseResult {
 export function parsePdfDiary(content: string): ParseResult {
 	const entries: DiaryEntry[] = [];
 	const errors: string[] = [];
+	const entryLineRanges: { startLine: number; endLine: number }[] = [];
 	
 	// 按行分割
 	const lines = content.split('\n');
 	
 	let currentEntry: DiaryEntry | null = null;
+	let currentStartLine = 0; // 当前条目的起始行（日期行）
 	let contentLines: string[] = [];
 	let expectingMetadata = false; // 标记是否在等待元数据行
 	let dateHeaderCount = 0; // 统计匹配到的日期标题行
@@ -228,12 +230,13 @@ export function parsePdfDiary(content: string): ParseResult {
 				currentEntry.content = contentLines.join('\n').trim();
 				if (currentEntry.content) {
 					entries.push(currentEntry);
+					entryLineRanges.push({ startLine: currentStartLine, endLine: i - 1 });
 				}
 			}
 			
 			// 解析新日记的日期
 			const [, year, month, day] = dateMatch;
-			
+			currentStartLine = i;
 			currentEntry = {
 				date: `${year}-${month}-${day}`,
 				weekday: '',
@@ -282,10 +285,11 @@ export function parsePdfDiary(content: string): ParseResult {
 		currentEntry.content = contentLines.join('\n').trim();
 		if (currentEntry.content) {
 			entries.push(currentEntry);
+			entryLineRanges.push({ startLine: currentStartLine, endLine: lines.length - 1 });
 		}
 	}
 	
-	return { entries, errors };
+	return { entries, errors, entryLineRanges };
 }
 
 /**
