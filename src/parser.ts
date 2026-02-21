@@ -101,8 +101,70 @@ const PDF_DATE_LINE_REGEX = /^(\d{4})年(\d{2})月(\d{2})日\s*$/;
 // 或: 周六 · 21:55 · 晴 · 4℃ · 斜塘淞泽家园六区 (有空格，使用℃)
 // 或: 周三 · 23:59 · 雨 · 斜塘淞泽家园六区 (无温度)
 // 格式: weekday[空格]·[空格]time[空格]·[空格]weather[空格]·[空格](temperature[空格]·[空格])?location
-// 注意：温度是可选的，但位置是必需的
-const PDF_METADATA_LINE_REGEX = /^([周一二三四五六日]+)\s*·\s*(\d{2}:\d{2})\s*·\s*([^·]*?)\s*·\s*(?:(?:(-?\d+[°℃]C?)\s*·\s*)?(.+))$/;
+// 注意：温度是可选的，但位置是必需的。星期支持康熙部首变体：⼀(U+2F00)⼆(U+2F06)⽇(U+2F47)，PDF 导出常使用这些码位
+const PDF_METADATA_LINE_REGEX = /^(周[一二三四五六日\u2f00\u2f06\u2f47]+)\s*·\s*(\d{2}:\d{2})\s*·\s*([^·]*?)\s*·\s*(?:(?:(-?\d+[°℃]C?)\s*·\s*)?(.+))$/;
+
+/** 句末标点：用于判断是否应合并为同一段落 */
+const SENTENCE_END_REGEX = /[。.!?！？;:）]$/;
+
+/**
+ * 判断是否为信息行（日期行、周几·时间·天气·温度·地点等），合并段落时视为段落边界，不参与与正文的合并。
+ */
+function isInfoLine(line: string): boolean {
+	const t = line.trim();
+	return (
+		PDF_DATE_HEADER_REGEX.test(t) ||
+		PDF_DATE_LINE_REGEX.test(t) ||
+		PDF_METADATA_LINE_REGEX.test(t)
+	);
+}
+
+/**
+ * 将正文多行合并为段落，保证段落连贯性；信息行与空行视为段落边界，不参与合并。
+ * - 空行：仅当上一行以句末标点（。.!?！？;:））结尾时才视为段落边界，否则忽略（避免 PDF 分页插入的空行把同一句拆成两段）。
+ * - 信息行（日期/天气/温度/地点等）：段落边界，该行单独成段。
+ * - 普通行：若上一行非空且非信息行且不以句末标点结尾，则与上一行合并（中间不插空格）；否则新起一段或段内新行。
+ */
+function mergeContentLinesToParagraphs(contentLines: string[]): string {
+	if (contentLines.length === 0) return '';
+	const paragraphs: string[][] = [[]];
+	for (const line of contentLines) {
+		const trimmed = line.trim();
+		if (trimmed === '') {
+			const last = paragraphs[paragraphs.length - 1];
+			const lastLine = last.length > 0 ? last[last.length - 1] : null;
+			const shouldBreak =
+				lastLine !== null && !isInfoLine(lastLine) && SENTENCE_END_REGEX.test(lastLine);
+			if (shouldBreak) {
+				paragraphs.push([]);
+			}
+			continue;
+		}
+		if (isInfoLine(line)) {
+			if (paragraphs[paragraphs.length - 1].length > 0) {
+				paragraphs.push([]);
+			}
+			paragraphs[paragraphs.length - 1].push(trimmed);
+			paragraphs.push([]);
+			continue;
+		}
+		const lastParagraph = paragraphs[paragraphs.length - 1];
+		const lastLine = lastParagraph.length > 0 ? lastParagraph[lastParagraph.length - 1] : null;
+		if (
+			lastLine !== null &&
+			!isInfoLine(lastLine) &&
+			!SENTENCE_END_REGEX.test(lastLine)
+		) {
+			lastParagraph[lastParagraph.length - 1] = lastLine + trimmed;
+		} else {
+			lastParagraph.push(trimmed);
+		}
+	}
+	return paragraphs
+		.map((p) => p.join('\n'))
+		.filter((s) => s.length > 0)
+		.join('\n\n');
+}
 
 /**
  * 解析 TXT 格式的日记文件
@@ -224,10 +286,10 @@ export function parsePdfDiary(content: string): ParseResult {
 		}
 		if (dateMatch) {
 			dateHeaderCount++;
-			
+
 			// 保存前一条日记
 			if (currentEntry) {
-				currentEntry.content = contentLines.join('\n').trim();
+				currentEntry.content = mergeContentLinesToParagraphs(contentLines).trim();
 				if (currentEntry.content) {
 					entries.push(currentEntry);
 					entryLineRanges.push({ startLine: currentStartLine, endLine: i - 1 });
@@ -253,8 +315,12 @@ export function parsePdfDiary(content: string): ParseResult {
 			if (metadataMatch) {
 				metadataCount++;
 				const [, weekday, time, weather, temperature, location] = metadataMatch;
-				
-				currentEntry.weekday = weekday;
+				// 将 PDF 中常见的康熙部首星期用字归一化为常用汉字（⼀→一、⼆→二、⽇→日）
+				const normalizedWeekday = weekday
+					.replace(/\u2f00/g, '一')
+					.replace(/\u2f06/g, '二')
+					.replace(/\u2f47/g, '日');
+				currentEntry.weekday = normalizedWeekday;
 				currentEntry.time = time || undefined;
 				currentEntry.weather = weather?.trim() || undefined;
 				// 统一温度格式：将℃转换为°C
@@ -282,13 +348,13 @@ export function parsePdfDiary(content: string): ParseResult {
 	
 	// 保存最后一条日记
 	if (currentEntry) {
-		currentEntry.content = contentLines.join('\n').trim();
+		currentEntry.content = mergeContentLinesToParagraphs(contentLines).trim();
 		if (currentEntry.content) {
 			entries.push(currentEntry);
 			entryLineRanges.push({ startLine: currentStartLine, endLine: lines.length - 1 });
 		}
 	}
-	
+
 	return { entries, errors, entryLineRanges };
 }
 

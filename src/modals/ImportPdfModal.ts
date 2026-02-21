@@ -208,33 +208,80 @@ export class ImportPdfModal extends Modal {
 				const page = await pdfDocument.getPage(pageNum);
 				const textContent = await page.getTextContent();
 
-				// 按行合并：PDF.js 的 items 是小块（字/词级别），需按 y 分组、行内按 x 排序后再拼接
-				type TextItemWithPos = { str: string; x: number; y: number };
+				// 方案 B：优先 hasEOL，否则按 y 分组 + 行高合并
+				type TextItemWithPos = { str: string; x: number; y: number; hasEOL?: boolean };
 				const itemsWithPos: TextItemWithPos[] = [];
+				let anyHasEOL = false;
 				for (const item of textContent.items) {
-					if ('str' in item && item.str) {
-						const transform = (item as { str: string; transform?: number[] }).transform;
-						const x = transform?.[4] ?? 0;
-						const y = transform?.[5] ?? 0;
-						itemsWithPos.push({ str: item.str, x, y });
+					const str = typeof (item as { str?: string }).str === 'string' ? (item as { str: string }).str : '';
+					const hasEOL = (item as { hasEOL?: boolean }).hasEOL === true;
+					if (hasEOL) anyHasEOL = true;
+					const transform = (item as { transform?: number[] }).transform;
+					const x = transform?.[4] ?? 0;
+					const y = transform?.[5] ?? 0;
+					// 只收集有内容的项，或仅 hasEOL 的项（用于换行）
+					if (str || hasEOL) {
+						itemsWithPos.push({ str: str || '', x, y, hasEOL });
 					}
 				}
 
-				const lineTolerance = 2; // 同一行 y 可能略有浮动
-				const lineMap = new Map<number, TextItemWithPos[]>();
-				for (const it of itemsWithPos) {
-					const yKey = Math.round(it.y / lineTolerance) * lineTolerance;
-					if (!lineMap.has(yKey)) lineMap.set(yKey, []);
-					lineMap.get(yKey)!.push(it);
+				const pageLines: string[] = [];
+
+				if (anyHasEOL && itemsWithPos.length > 0) {
+					// 使用 hasEOL：按阅读顺序（y 降序、x 升序）排序后，按 hasEOL 插入换行
+					const sorted = [...itemsWithPos].sort((a, b) => {
+						if (Math.abs(a.y - b.y) > 2) return b.y - a.y;
+						return a.x - b.x;
+					});
+					let currentLine = '';
+					for (const it of sorted) {
+						currentLine += it.str;
+						if (it.hasEOL) {
+							pageLines.push(currentLine);
+							currentLine = '';
+						}
+					}
+					if (currentLine) pageLines.push(currentLine);
+				} else {
+					// 回退：按 y 分组，再按行高合并（软换行合并为一行）
+					const lineTolerance = 2;
+					const lineMap = new Map<number, TextItemWithPos[]>();
+					for (const it of itemsWithPos) {
+						const yKey = Math.round(it.y / lineTolerance) * lineTolerance;
+						if (!lineMap.has(yKey)) lineMap.set(yKey, []);
+						lineMap.get(yKey)!.push(it);
+					}
+					const sortedYKeys = [...lineMap.keys()].sort((a, b) => b - a);
+					// 估计行高：相邻 y 键差值的中位数
+					const gaps: number[] = [];
+					for (let i = 1; i < sortedYKeys.length; i++) {
+						gaps.push(sortedYKeys[i - 1] - sortedYKeys[i]);
+					}
+					const lineHeight =
+						gaps.length > 0
+							? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
+							: 12;
+					const mergeThreshold = lineHeight * 1.2;
+
+					let pendingLine = '';
+					let lastY: number | null = null;
+					for (const yKey of sortedYKeys) {
+						const lineItems = lineMap.get(yKey)!;
+						lineItems.sort((a, b) => a.x - b.x);
+						const lineText = lineItems.map((it) => it.str).join('');
+						const shouldMerge =
+							lastY !== null && lastY - yKey < mergeThreshold && lineText.trim() !== '';
+						if (shouldMerge && pendingLine) {
+							pendingLine += ' ' + lineText.trim();
+						} else {
+							if (pendingLine) pageLines.push(pendingLine);
+							pendingLine = lineText;
+						}
+						lastY = yKey;
+					}
+					if (pendingLine) pageLines.push(pendingLine);
 				}
 
-				const pageLines: string[] = [];
-				const sortedYKeys = [...lineMap.keys()].sort((a, b) => b - a); // PDF 坐标系从上到下 y 递减
-				for (const yKey of sortedYKeys) {
-					const lineItems = lineMap.get(yKey)!;
-					lineItems.sort((a, b) => a.x - b.x);
-					pageLines.push(lineItems.map((it) => it.str).join(''));
-				}
 				const pageText = pageLines.join('\n');
 				this.pageTexts.push(pageText);
 
